@@ -1,10 +1,12 @@
 #include "meshwifi/meshhttp.h"
 #include "NodeDB.h"
+#include "PowerFSM.h"
+#include "airtime.h"
 #include "configuration.h"
+#include "esp_task_wdt.h"
 #include "main.h"
 #include "meshhttpStatic.h"
 #include "meshwifi/meshwifi.h"
-#include "PowerFSM.h"
 #include "sleep.h"
 #include <HTTPBodyParser.hpp>
 #include <HTTPMultipartBodyParser.hpp>
@@ -64,6 +66,7 @@ void handleScanNetworks(HTTPRequest *req, HTTPResponse *res);
 void handleSpiffsBrowseStatic(HTTPRequest *req, HTTPResponse *res);
 void handleSpiffsDeleteStatic(HTTPRequest *req, HTTPResponse *res);
 void handleBlinkLED(HTTPRequest *req, HTTPResponse *res);
+void handleReport(HTTPRequest *req, HTTPResponse *res);
 
 void middlewareSpeedUp240(HTTPRequest *req, HTTPResponse *res, std::function<void()> next);
 void middlewareSpeedUp160(HTTPRequest *req, HTTPResponse *res, std::function<void()> next);
@@ -80,7 +83,7 @@ char contentTypes[][2][32] = {{".txt", "text/plain"},     {".html", "text/html"}
                               {".js", "text/javascript"}, {".png", "image/png"},
                               {".jpg", "image/jpg"},      {".gz", "application/gzip"},
                               {".gif", "image/gif"},      {".json", "application/json"},
-                              {".css", "text/css"},       {".ico","image/vnd.microsoft.icon"},
+                              {".css", "text/css"},       {".ico", "image/vnd.microsoft.icon"},
                               {".svg", "image/svg+xml"},  {"", ""}};
 
 void handleWebResponse()
@@ -188,6 +191,7 @@ void createSSLCert()
         DEBUG_MSG(".");
         delay(1000);
         yield();
+        esp_task_wdt_reset();
     }
     DEBUG_MSG("SSL Cert Ready!\n");
 }
@@ -248,6 +252,7 @@ void initWebServer()
     ResourceNode *nodeFormUpload = new ResourceNode("/upload", "POST", &handleFormUpload);
     ResourceNode *nodeJsonScanNetworks = new ResourceNode("/json/scanNetworks", "GET", &handleScanNetworks);
     ResourceNode *nodeJsonBlinkLED = new ResourceNode("/json/blink", "POST", &handleBlinkLED);
+    ResourceNode *nodeJsonReport = new ResourceNode("/json/report", "GET", &handleReport);
     ResourceNode *nodeJsonSpiffsBrowseStatic = new ResourceNode("/json/spiffs/browse/static/", "GET", &handleSpiffsBrowseStatic);
     ResourceNode *nodeJsonDelete = new ResourceNode("/json/spiffs/delete/static", "DELETE", &handleSpiffsDeleteStatic);
 
@@ -267,6 +272,7 @@ void initWebServer()
     secureServer->registerNode(nodeJsonBlinkLED);
     secureServer->registerNode(nodeJsonSpiffsBrowseStatic);
     secureServer->registerNode(nodeJsonDelete);
+    secureServer->registerNode(nodeJsonReport);
     secureServer->setDefaultNode(node404);
 
     secureServer->addMiddleware(&middlewareSpeedUp240);
@@ -287,6 +293,7 @@ void initWebServer()
     insecureServer->registerNode(nodeJsonBlinkLED);
     insecureServer->registerNode(nodeJsonSpiffsBrowseStatic);
     insecureServer->registerNode(nodeJsonDelete);
+    insecureServer->registerNode(nodeJsonReport);
     insecureServer->setDefaultNode(node404);
 
     insecureServer->addMiddleware(&middlewareSpeedUp160);
@@ -336,7 +343,7 @@ void middlewareSpeedUp160(HTTPRequest *req, HTTPResponse *res, std::function<voi
 void handleStaticPost(HTTPRequest *req, HTTPResponse *res)
 {
     // Assume POST request. Contains submitted data.
-    res->println("<html><head><title>File Edited</title><meta http-equiv=\"refresh\" content=\"3;url=/static\" "
+    res->println("<html><head><title>File Edited</title><meta http-equiv=\"refresh\" content=\"1;url=/static\" "
                  "/><head><body><h1>File Edited</h1>");
 
     // The form is submitted with the x-www-form-urlencoded content type, so we need the
@@ -458,26 +465,26 @@ void handleSpiffsBrowseStatic(HTTPRequest *req, HTTPResponse *res)
 
 void handleSpiffsDeleteStatic(HTTPRequest *req, HTTPResponse *res)
 {
-  ResourceParameters *params = req->getParams();
-  std::string paramValDelete;
+    ResourceParameters *params = req->getParams();
+    std::string paramValDelete;
 
-  res->setHeader("Content-Type", "application/json");
-  if (params->getQueryParameter("delete", paramValDelete)) {
-    std::string pathDelete = "/" + paramValDelete;
-    if (SPIFFS.remove(pathDelete.c_str())) {
-        Serial.println(pathDelete.c_str());
-        res->println("{");
-        res->println("\"status\": \"ok\"");
-        res->println("}");
-        return;
-    } else {
-        Serial.println(pathDelete.c_str());
-        res->println("{");
-        res->println("\"status\": \"Error\"");
-        res->println("}");
-        return;
+    res->setHeader("Content-Type", "application/json");
+    if (params->getQueryParameter("delete", paramValDelete)) {
+        std::string pathDelete = "/" + paramValDelete;
+        if (SPIFFS.remove(pathDelete.c_str())) {
+            Serial.println(pathDelete.c_str());
+            res->println("{");
+            res->println("\"status\": \"ok\"");
+            res->println("}");
+            return;
+        } else {
+            Serial.println(pathDelete.c_str());
+            res->println("{");
+            res->println("\"status\": \"Error\"");
+            res->println("}");
+            return;
+        }
     }
-  }
 }
 
 void handleStaticBrowse(HTTPRequest *req, HTTPResponse *res)
@@ -494,15 +501,15 @@ void handleStaticBrowse(HTTPRequest *req, HTTPResponse *res)
         std::string pathDelete = "/" + paramValDelete;
         if (SPIFFS.remove(pathDelete.c_str())) {
             Serial.println(pathDelete.c_str());
-            res->println("<html><head><meta http-equiv=\"refresh\" content=\"3;url=/static\" /><title>File "
+            res->println("<html><head><meta http-equiv=\"refresh\" content=\"1;url=/static\" /><title>File "
                          "deleted!</title></head><body><h1>File deleted!</h1>");
-            res->println("<meta http-equiv=\"refresh\" content=\"2;url=/static\" />\n");
+            res->println("<meta http-equiv=\"refresh\" 1;url=/static\" />\n");
             res->println("</body></html>");
 
             return;
         } else {
             Serial.println(pathDelete.c_str());
-            res->println("<html><head><meta http-equiv=\"refresh\" content=\"3;url=/static\" /><title>Error deleteing "
+            res->println("<html><head><meta http-equiv=\"refresh\" content=\"1;url=/static\" /><title>Error deleteing "
                          "file!</title></head><body><h1>Error deleteing file!</h1>");
             res->println("Error deleteing file!<br>");
 
@@ -554,7 +561,7 @@ void handleStaticBrowse(HTTPRequest *req, HTTPResponse *res)
     res->println("<h2>Upload new file</h2>");
     res->println("<p><b>*** This interface is experimental ***</b></p>");
     res->println("<p>This form allows you to upload files. Keep your filenames very short and files small. Big filenames and big "
-                 "files are a known problem.</p>");
+                 "files (>200k) are a known problem.</p>");
     res->println("<form method=\"POST\" action=\"/upload\" enctype=\"multipart/form-data\">");
     res->println("file: <input type=\"file\" name=\"file\"><br>");
     res->println("<input type=\"submit\" value=\"Upload\">");
@@ -695,6 +702,9 @@ void handleStatic(HTTPRequest *req, HTTPResponse *res)
 
 void handleFormUpload(HTTPRequest *req, HTTPResponse *res)
 {
+    // The upload process is very CPU intensive. Let's speed things up a bit.
+    setCpuFrequencyMhz(240);
+
     // First, we need to check the encoding of the form that we have received.
     // The browser will set the Content-Type request header, so we can use it for that purpose.
     // Then we select the body parser based on the encoding.
@@ -721,7 +731,7 @@ void handleFormUpload(HTTPRequest *req, HTTPResponse *res)
         return;
     }
 
-    res->println("<html><head><meta http-equiv=\"refresh\" content=\"3;url=/static\" /><title>File "
+    res->println("<html><head><meta http-equiv=\"refresh\" content=\"1;url=/static\" /><title>File "
                  "Upload</title></head><body><h1>File Upload</h1>");
 
     // We iterate over the fields. Any field with a filename is uploaded.
@@ -781,20 +791,31 @@ void handleFormUpload(HTTPRequest *req, HTTPResponse *res)
         // With endOfField you can check whether the end of field has been reached or if there's
         // still data pending. With multipart bodies, you cannot know the field size in advance.
         while (!parser->endOfField()) {
+            esp_task_wdt_reset();
+
             byte buf[512];
             size_t readLength = parser->read(buf, 512);
-            file.write(buf, readLength);
-            fileLength += readLength;
+            // DEBUG_MSG("\n\nreadLength - %i\n", readLength);
 
             // Abort the transfer if there is less than 50k space left on the filesystem.
             if (SPIFFS.totalBytes() - SPIFFS.usedBytes() < 51200) {
                 file.close();
-                res->println("<p>Write aborted! File is won't fit!</p>");
+                res->println("<p>Write aborted! Reserving 50k on filesystem.</p>");
+
+                // enableLoopWDT();
 
                 delete parser;
                 return;
             }
+
+            //if (readLength) {
+                file.write(buf, readLength);
+                fileLength += readLength;
+                DEBUG_MSG("File Length %i\n", fileLength);
+            //}
         }
+        // enableLoopWDT();
+
         file.close();
         res->printf("<p>Saved %d bytes to %s</p>", (int)fileLength, pathname.c_str());
     }
@@ -843,10 +864,8 @@ void handleHotspot(HTTPRequest *req, HTTPResponse *res)
     // We want to deliver a simple HTML page, so we send a corresponding content type:
     res->setHeader("Content-Type", "text/html");
 
-    // The response implements the Print interface, so you can use it just like
-    // you would write to Serial etc.
-    res->println("<!DOCTYPE html>");
-    res->println("<meta http-equiv=\"refresh\" content=\"0;url=http://meshtastic.org/\" />\n");
+    // res->println("<!DOCTYPE html>");
+    res->println("<meta http-equiv=\"refresh\" content=\"0;url=/\" />\n");
 }
 
 void handleAPIv1FromRadio(HTTPRequest *req, HTTPResponse *res)
@@ -969,7 +988,7 @@ void handleRoot(HTTPRequest *req, HTTPResponse *res)
         res->printf("<p></p>\n");
         res->printf("<p>You have gotten this error because the filesystem for the web server has not been loaded.</p>\n");
         res->printf("<p>Please review the 'Common Problems' section of the <a "
-                    "href=https://github.com/meshtastic/Meshtastic-device/issues/552>web interface</a> documentation.</p>\n");
+                    "href=https://github.com/meshtastic/Meshtastic-device/wiki/How-to-use-the-Meshtastic-Web-Interface-over-WiFi>web interface</a> documentation.</p>\n");
         return;
     }
 
@@ -1037,6 +1056,97 @@ void handleBlinkLED(HTTPRequest *req, HTTPResponse *res)
     }
 
     res->println("{");
+    res->println("\"status\": \"ok\"");
+    res->println("}");
+}
+
+void handleReport(HTTPRequest *req, HTTPResponse *res)
+{
+
+    ResourceParameters *params = req->getParams();
+    std::string content;
+
+    if (!params->getQueryParameter("content", content)) {
+        content = "json";
+    }
+
+    if (content == "json") {
+        res->setHeader("Content-Type", "application/json");
+
+    } else {
+        res->setHeader("Content-Type", "text/html");
+        res->println("<pre>");
+    }
+
+    res->println("{");
+
+    res->println("\"data\": {");
+
+    res->println("\"airtime\": {");
+
+    uint16_t *logArray;
+
+    res->print("\"tx_log\": [");
+
+    logArray = airtimeReport(TX_LOG);
+    for (int i = 0; i < getPeriodsToLog(); i++) {
+        uint16_t tmp;
+        tmp = *(logArray + i);
+        res->printf("%d", tmp);
+        if (i != getPeriodsToLog() - 1) {
+            res->print(", ");
+        }
+    }
+
+    res->println("],");
+    res->print("\"rx_log\": [");
+
+    logArray = airtimeReport(RX_LOG);
+    for (int i = 0; i < getPeriodsToLog(); i++) {
+        uint16_t tmp;
+        tmp = *(logArray + i);
+        res->printf("%d", tmp);
+        if (i != getPeriodsToLog() - 1) {
+            res->print(", ");
+        }
+    }
+
+    res->println("],");
+    res->print("\"rx_all_log\": [");
+
+    logArray = airtimeReport(RX_ALL_LOG);
+    for (int i = 0; i < getPeriodsToLog(); i++) {
+        uint16_t tmp;
+        tmp = *(logArray + i);
+        res->printf("%d", tmp);
+        if (i != getPeriodsToLog() - 1) {
+            res->print(", ");
+        }
+    }
+
+    res->println("],");
+    res->printf("\"seconds_since_boot\": %u,\n", getSecondsSinceBoot());
+    res->printf("\"seconds_per_period\": %u,\n", getSecondsPerPeriod());
+    res->printf("\"periods_to_log\": %u\n", getPeriodsToLog());
+
+    res->println("},");
+
+    res->println("\"wifi\": {");
+
+    res->println("\"rssi\": " + String(WiFi.RSSI()) + ",");
+
+    if (radioConfig.preferences.wifi_ap_mode || isSoftAPForced()) {
+        res->println("\"ip\": \"" + String(WiFi.softAPIP().toString().c_str()) + "\"");
+    } else {
+        res->println("\"ip\": \"" + String(WiFi.localIP().toString().c_str()) + "\"");
+    }
+
+    res->println("},");
+
+    res->println("\"test\": 123");
+
+    res->println("},");
+
     res->println("\"status\": \"ok\"");
     res->println("}");
 }
